@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import unicode_literals
+import datetime
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -49,9 +50,11 @@ class Article(TranslatableModel):
                 'Clear it to have it re-created automatically.'),
         ),
         lead_in=HTMLField(
-            verbose_name=_('lead-in'), default='',
+            verbose_name=_('Optional lead-in'), default='',
             help_text=_('Will be displayed in lists, and at the start of the '
-                        'detail page (in bold)')),
+                        'detail page (in bold)'),
+            blank=True,
+            ),
         meta_title=models.CharField(
             max_length=255, verbose_name=_('meta title'),
             blank=True, default=''),
@@ -69,13 +72,15 @@ class Article(TranslatableModel):
                                verbose_name=_('author'))
     owner = models.ForeignKey(User, verbose_name=_('owner'))
     app_config = models.ForeignKey(NewsBlogConfig,
-                                   verbose_name=_('app_config'))
+                                   verbose_name=_('app. config'))
     categories = CategoryManyToManyField('aldryn_categories.Category',
                                          verbose_name=_('categories'),
                                          blank=True)
-    publishing_date = models.DateTimeField(_('publishing date'))
+    publishing_date = models.DateTimeField(_('publishing date'), default=datetime.datetime.now)
     is_published = models.BooleanField(_('is published'), default=True,
                                        db_index=True)
+    is_featured = models.BooleanField(_('is featured'), default=False,
+                                      db_index=True)
     featured_image = FilerImageField(null=True, blank=True)
 
     tags = TaggableManager(blank=True)
@@ -88,9 +93,13 @@ class Article(TranslatableModel):
         return self.safe_translation_getter('title', any_language=True)
 
     def get_absolute_url(self):
-        return reverse('aldryn_newsblog:article-detail', kwargs={
-            'slug': self.safe_translation_getter('slug', any_language=True)
-        }, current_app=self.app_config.namespace)
+        return reverse(
+            '{namespace}:article-detail'.format(
+                namespace=self.app_config.namespace
+            ), kwargs={
+                'slug': self.safe_translation_getter('slug', any_language=True)
+            }
+        )
 
     def slugify(self, source_text, i=None):
         slug = default_slugify(source_text)
@@ -99,10 +108,8 @@ class Article(TranslatableModel):
         return slug
 
     def save(self, *args, **kwargs):
-        create_author = getattr(
-            settings, 'ALDRYN_NEWSBLOG_CREATE_AUTHOR', True)
         # Ensure there is an owner.
-        if create_author and self.author is None:
+        if self.app_config.create_authors and self.author is None:
             self.author = Person.objects.get_or_create(
                 user=self.owner,
                 defaults={
@@ -115,17 +122,9 @@ class Article(TranslatableModel):
             self.slug = default_slugify(self.title)
 
         # Ensure we aren't colliding with an existing slug *for this language*.
-        try:
-            if connection.vendor in ('sqlite', ):
-                # NOTE: This if statement should not be necessary, but testing
-                # is showing that SQLite is not respecting the unique_together
-                # constraint!
-                if Article.objects.translated(
-                        slug=self.slug).exclude(id=self.id).count():
-                    raise IntegrityError
+        if Article.objects.translated(
+                slug=self.slug).exclude(id=self.id).count() == 0:
             return super(Article, self).save(*args, **kwargs)
-        except IntegrityError:
-            pass
 
         for lang in LANGUAGE_CODES:
             #
@@ -175,6 +174,6 @@ class LatestEntriesPlugin(NewsBlogCMSPlugin):
         return u'Latest entries: {0}'.format(self.latest_entries)
 
     def get_articles(self):
-        articles = Article.objects.active_translations(get_language()).filter(
-            app_config=self.app_config)
+        articles = Article.objects.published().active_translations(
+            get_language()).filter(app_config=self.app_config)
         return articles[:self.latest_entries]

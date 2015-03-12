@@ -2,6 +2,7 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 
 from django.conf import settings
+from django.core.urlresolvers import reverse
 from django.utils import translation
 from django.views.generic import ListView
 from django.views.generic.detail import DetailView
@@ -16,26 +17,51 @@ from aldryn_people.models import Person
 from .models import Article
 
 
-class ArticleDetail(TranslatableSlugMixin, AppConfigMixin, DetailView):
+class AppConfigViewMixin(AppConfigMixin):
+
+    def get_context_data(self, **kwargs):
+        """Adds the config to the context"""
+        context = super(AppConfigViewMixin, self).get_context_data(**kwargs)
+        context['app_config'] = self.config
+        return context
+
+
+class ArticleDetail(TranslatableSlugMixin, AppConfigViewMixin, DetailView):
     model = Article
     slug_field = 'slug'
 
+    def get_context_data(self, **kwargs):
+        context = super(ArticleDetail, self).get_context_data(**kwargs)
+        context['article_list_url'] = reverse('{config}:article-list'.format(
+            config=self.config.namespace))
+        context['article_list_by_author_url'] = reverse('{config}:article-list-by-author'.format(
+            config=self.config.namespace), args=[self.object.author.slug, ])
+        return context
+
     def get_queryset(self):
-        return Article.objects.active_translations(
+        return Article.objects.published().active_translations(
             translation.get_language()
         ).filter(
             app_config__namespace=self.namespace
         )
 
 
-class ArticleList(ViewUrlMixin, AppConfigMixin, ListView):
+class ArticleList(ViewUrlMixin, AppConfigViewMixin, ListView):
     """A complete list of articles."""
     model = Article
-    paginate_by = getattr(settings, 'ALDRYN_NEWSBLOG_PAGINATE_BY', 10)
+
+    def get_paginate_by(self, queryset):
+        if self.paginate_by and self.paginate_by is not None:
+            return self.paginate_by
+        else:
+            try:
+                return self.app_config.paginate_by
+            except AttributeError:
+                return 10  # sensible failsafe
 
     @property
     def queryset(self):
-        return Article.objects.active_translations(
+        return Article.objects.published().active_translations(
             translation.get_language()
         ).filter(
             app_config__namespace=self.namespace
