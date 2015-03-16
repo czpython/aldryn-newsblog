@@ -45,7 +45,7 @@ class ArticleAdmin(VersionedPlaceholderAdminMixin,
     )
     fieldsets = (
         (None, {
-            'fields': ('title', 'featured_image',  )
+            'fields': ('title', 'featured_image', )
         }),
         ('Details', {
             'classes': ('collapse',),
@@ -72,7 +72,7 @@ class ArticleAdmin(VersionedPlaceholderAdminMixin,
             pass
 
         data['owner'] = request.user.pk
-
+        request.GET = data
         return super(ArticleAdmin, self).add_view(request, *args, **kwargs)
 
 
