@@ -1,14 +1,17 @@
 {
-    "name": "Aldryn News & Blog",
-    "description": "Adds news and blogging abilities to django CMS",
-    "url": "https://github.com/aldryn/aldryn-newsblog",
     "package-name": "aldryn-newsblog",
     "installed-apps": [
+        "aldryn_apphooks_config",
+        "aldryn_boilerplates",
+        "aldryn_categories",
+        "aldryn_common",
+        "aldryn_newsblog",
         "aldryn_people",
         "aldryn_reversion",
-        "aldryn_common",
-        "taggit",
-        "aldryn_newsblog"
+        "easy_thumbnails",
+        "filer",
+        "sortedm2m",
+        "taggit"
     ],
     "author": {
         "name": "Divio AG",

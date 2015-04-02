@@ -3,22 +3,24 @@ from setuptools import setup, find_packages
 from aldryn_newsblog import __version__
 
 REQUIREMENTS = [
-    'backport_collections==0.1',
-    'django-parler',
-    'django-filer>=0.9.9,<0.10',
-    'aldryn-common',
-    'django-appdata>=0.1.4',
-    'django-cms>=3.0.12',
-    'aldryn-people>=0.4.6',
-    'django>=1.6,<1.8',
-    'aldryn-apphooks-config>=0.1.0',
-    'django-reversion>=1.8.2,<1.9',
-    'django-taggit',
+    'aldryn-apphooks-config>=0.1.4',
     'aldryn-boilerplates',
     'aldryn-categories',
-    'aldryn-reversion',
+    'aldryn-common',
+    'aldryn-people>=0.4.6',
+    'aldryn-reversion>=0.0.2',
+    'backport_collections==0.1',
+    'django-appdata>=0.1.4',
+    'django-cms>=3.0.12',
+    'django-filer>=0.9.9,<0.10',
+    'django-parler',
+    'django-reversion>=1.8.2,<1.9',
+    'django-sortedm2m',
+    'django-taggit',
+    'django>=1.6,<1.8',
+    'lxml',
+    'pytz',
     'six',
-    'pytz'
 ]
 
 CLASSIFIERS = [
@@ -49,8 +51,4 @@ setup(
     include_package_data=True,
     zip_safe=False,
     test_suite="test_settings.run",
-    dependency_links=[
-        'git+https://github.com/yakky/django-cms@future/integration#egg=django-cms-3.0.90a3',
-        'git+https://github.com/aldryn/aldryn-apphooks-config#egg=aldryn-apphooks-config-0.1.0',
-    ],
 )

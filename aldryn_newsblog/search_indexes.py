@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from django.utils.encoding import force_text
+from django.conf import settings
 
-from aldryn_search.helpers import get_plugin_index_data
-from aldryn_search.utils import get_index_base, strip_tags
+from aldryn_search.utils import get_index_base
 
 from .models import Article
 
 
 class ArticleIndex(get_index_base()):
-    haystack_use_for_indexing = True
+    haystack_use_for_indexing = getattr(
+        settings, 'ALDRYN_NEWSBLOG_SEARCH', True)
 
     index_title = True
 
@@ -36,15 +36,5 @@ class ArticleIndex(get_index_base()):
     def get_model(self):
         return Article
 
-    def get_search_data(self, obj, language, request):
-        description = self.get_description(obj)
-        text_bits = [strip_tags(description)]
-        for category in obj.categories.all():
-            text_bits.append(force_text(category.safe_translation_getter('name')))
-        for tag in obj.tags.all():
-            text_bits.append(force_text(tag.name))
-        if obj.content:
-            for base_plugin in obj.content.cmsplugin_set.filter(language=language):
-                plugin_text_content = ' '.join(get_plugin_index_data(base_plugin, request))
-                text_bits.append(plugin_text_content)
-        return ' '.join(text_bits)
+    def get_search_data(self, article, language, request):
+        return article.search_data
