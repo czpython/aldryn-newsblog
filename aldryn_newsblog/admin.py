@@ -10,9 +10,10 @@ from cms.admin.placeholderadmin import (
 )
 from parler.forms import TranslatableModelForm
 from parler.admin import TranslatableAdmin
-from aldryn_apphooks_config.admin import BaseAppHookConfig
+from aldryn_apphooks_config.admin import BaseAppHookConfig, ModelAppHookConfig
 from aldryn_people.models import Person
 from aldryn_reversion.admin import VersionedPlaceholderAdminMixin
+
 from . import models
 
 
@@ -60,13 +61,20 @@ class ArticleAdminForm(TranslatableModelForm):
         if self.instance.pk:
             qs = qs.exclude(pk=self.instance.pk)
 
-        self.fields['related'].queryset = qs
+        if 'related' in self.fields:
+            self.fields['related'].queryset = qs
+
+        # Don't allow app_configs to be added here. The correct way to add an
+        # apphook-config is to create an apphook on a cms Page.
+        self.fields['app_config'].widget.can_add_related = False
 
 
-class ArticleAdmin(VersionedPlaceholderAdminMixin,
-                   TranslatableAdmin,
-                   FrontendEditableAdminMixin,
-                   admin.ModelAdmin):
+class ArticleAdmin(
+    VersionedPlaceholderAdminMixin,
+    FrontendEditableAdminMixin,
+    ModelAppHookConfig,
+    TranslatableAdmin
+):
     form = ArticleAdminForm
     list_display = ('title', 'app_config', 'slug', 'is_featured',
                     'is_published')
@@ -77,30 +85,35 @@ class ArticleAdmin(VersionedPlaceholderAdminMixin,
     fieldsets = (
         (None, {
             'fields': (
+                'app_config',
                 'title',
                 'featured_image',
+                ('owner', 'author', ),
             )
         }),
         ('Details', {
             'fields': (
+                ('is_published', 'publishing_date', ),
                 'is_featured',
                 'tags',
                 'categories',
                 'lead_in',
-                'publishing_date',
-                'is_published',
                 'related',
             )
         }),
         ('Meta options', {
             'classes': ('collapse',),
-            'fields': ('meta_title', 'meta_description', 'meta_keywords')
-        }),
-        ('Advanced', {
-            'classes': ('collapse',),
-            'fields': ('author', 'owner', 'app_config')
+            'fields': (
+                'slug',
+                'meta_title',
+                'meta_description',
+                'meta_keywords',
+            )
         }),
     )
+    app_config_values = {
+        'default_published': 'is_published'
+    }
 
     def add_view(self, request, *args, **kwargs):
         data = request.GET.copy()
@@ -119,11 +132,16 @@ class ArticleAdmin(VersionedPlaceholderAdminMixin,
 admin.site.register(models.Article, ArticleAdmin)
 
 
-class NewsBlogConfigAdmin(TranslatableAdmin,
-                          PlaceholderAdminMixin,
-                          BaseAppHookConfig):
+class NewsBlogConfigAdmin(
+    PlaceholderAdminMixin,
+    BaseAppHookConfig,
+    TranslatableAdmin
+):
     def get_config_fields(self):
-        return ('app_title', 'paginate_by', 'create_authors', 'search_indexed', )
-
+        return (
+            'app_title', 'permalink_type', 'non_permalink_handling',
+            'template_prefix',
+            'paginate_by', 'create_authors', 'search_indexed',
+            'config.default_published', )
 
 admin.site.register(models.NewsBlogConfig, NewsBlogConfigAdmin)

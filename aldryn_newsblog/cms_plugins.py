@@ -2,19 +2,32 @@
 
 from __future__ import unicode_literals
 
-from django.core.urlresolvers import reverse
 from django.utils.translation import ugettext_lazy as _
 
 from cms.plugin_base import CMSPluginBase
 from cms.plugin_pool import plugin_pool
 
 from . import models
+from .utils import add_prefix_to_path, default_reverse
 
 
-class NewsBlogPlugin(CMSPluginBase):
+class TemplatePrefixMixin(object):
+
+    def get_render_template(self, context, instance, placeholder):
+        if (hasattr(instance, 'app_config') and
+                instance.app_config.template_prefix):
+            return add_prefix_to_path(
+                self.render_template,
+                instance.app_config.template_prefix
+            )
+        return self.render_template
+
+
+class NewsBlogPlugin(TemplatePrefixMixin, CMSPluginBase):
     module = 'NewsBlog'
 
 
+@plugin_pool.register_plugin
 class NewsBlogArchivePlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/archive.html'
     name = _('Archive')
@@ -33,9 +46,8 @@ class NewsBlogArchivePlugin(NewsBlogPlugin):
         )
         return context
 
-plugin_pool.register_plugin(NewsBlogArchivePlugin)
 
-
+@plugin_pool.register_plugin
 class NewsBlogArticleSearchPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/article_search.html'
     name = _('Article Search')
@@ -43,13 +55,12 @@ class NewsBlogArticleSearchPlugin(NewsBlogPlugin):
 
     def render(self, context, instance, placeholder):
         context['instance'] = instance
-        context['query_url'] = reverse('{0}:article-search'.format(
-            instance.app_config.namespace))
+        context['query_url'] = default_reverse('{0}:article-search'.format(
+            instance.app_config.namespace), default=None)
         return context
 
-plugin_pool.register_plugin(NewsBlogArticleSearchPlugin)
 
-
+@plugin_pool.register_plugin
 class NewsBlogAuthorsPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/authors.html'
     name = _('Authors')
@@ -59,13 +70,14 @@ class NewsBlogAuthorsPlugin(NewsBlogPlugin):
         request = context.get('request')
         context['instance'] = instance
         context['authors_list'] = instance.get_authors(request)
-        context['article_list_url'] = reverse(
-            '{0}:article-list'.format(instance.app_config.namespace))
+        context['article_list_url'] = default_reverse(
+            '{0}:article-list'.format(instance.app_config.namespace),
+            default=None)
+
         return context
 
-plugin_pool.register_plugin(NewsBlogAuthorsPlugin)
 
-
+@plugin_pool.register_plugin
 class NewsBlogCategoriesPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/categories.html'
     name = _('Categories')
@@ -75,14 +87,13 @@ class NewsBlogCategoriesPlugin(NewsBlogPlugin):
         request = context.get('request')
         context['instance'] = instance
         context['categories'] = instance.get_categories(request)
-        context['article_list_url'] = reverse(
-            '{0}:article-list'.format(instance.app_config.namespace))
+        context['article_list_url'] = default_reverse(
+            '{0}:article-list'.format(instance.app_config.namespace),
+            default=None)
         return context
 
 
-plugin_pool.register_plugin(NewsBlogCategoriesPlugin)
-
-
+@plugin_pool.register_plugin
 class NewsBlogFeaturedArticlesPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/featured_articles.html'
     name = _('Featured Articles')
@@ -95,9 +106,7 @@ class NewsBlogFeaturedArticlesPlugin(NewsBlogPlugin):
         return context
 
 
-plugin_pool.register_plugin(NewsBlogFeaturedArticlesPlugin)
-
-
+@plugin_pool.register_plugin
 class NewsBlogLatestArticlesPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/latest_articles.html'
     name = _('Latest Articles')
@@ -111,17 +120,14 @@ class NewsBlogLatestArticlesPlugin(NewsBlogPlugin):
         return context
 
 
-plugin_pool.register_plugin(NewsBlogLatestArticlesPlugin)
-
-
+@plugin_pool.register_plugin
 class NewsBlogRelatedPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/related_articles.html'
     name = _('Related Articles')
     cache = False
     model = models.NewsBlogRelatedPlugin
 
-    def get_article(self, context):
-        request = context.get('request')
+    def get_article(self, request):
         if request and request.resolver_match:
             view_name = request.resolver_match.view_name
             namespace = request.resolver_match.namespace
@@ -133,17 +139,16 @@ class NewsBlogRelatedPlugin(NewsBlogPlugin):
         return None
 
     def render(self, context, instance, placeholder):
+        request = context.get('request')
         context['instance'] = instance
-        article = self.get_article(context)
+        article = self.get_article(request)
         if article:
             context['article'] = article
-            context['article_list'] = article.related.all()
+            context['article_list'] = instance.get_articles(article, request)
         return context
 
 
-plugin_pool.register_plugin(NewsBlogRelatedPlugin)
-
-
+@plugin_pool.register_plugin
 class NewsBlogTagsPlugin(NewsBlogPlugin):
     render_template = 'aldryn_newsblog/plugins/tags.html'
     name = _('Tags')
@@ -153,9 +158,7 @@ class NewsBlogTagsPlugin(NewsBlogPlugin):
         request = context.get('request')
         context['instance'] = instance
         context['tags'] = instance.get_tags(request)
-        context['article_list_url'] = reverse(
-            '{0}:article-list'.format(instance.app_config.namespace))
+        context['article_list_url'] = default_reverse(
+            '{0}:article-list'.format(instance.app_config.namespace),
+            default=None)
         return context
-
-
-plugin_pool.register_plugin(NewsBlogTagsPlugin)

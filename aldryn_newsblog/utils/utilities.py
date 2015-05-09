@@ -4,6 +4,7 @@ from __future__ import unicode_literals
 
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
+from django.core.urlresolvers import reverse, NoReverseMatch
 from django.db import models
 from django.template import RequestContext
 from django.test import RequestFactory
@@ -15,6 +16,29 @@ from django.utils.html import strip_tags as _strip_tags
 from django.utils.text import smart_split
 
 from lxml.html.clean import Cleaner as LxmlCleaner
+
+
+def default_reverse(*args, **kwargs):
+    """
+    Acts just like django.core.urlresolvers.reverse() except that if the
+    resolver raises a NoReverseMatch exception, then a default value will be
+    returned instead. If no default value is provided, then the exception will
+    be raised as normal.
+
+    NOTE: Any exception that is not NoReverseMatch will always be raised as
+    normal, even if a default is provided.
+    """
+
+    # We're explicitly NOT happy to just re-raise the exception, as that may
+    # adversely affect stack traces.
+    if 'default' not in kwargs:
+        return reverse(*args, **kwargs)
+    else:
+        default = kwargs.pop('default', None)
+        try:
+            return reverse(*args, **kwargs)
+        except NoReverseMatch:
+            return default
 
 
 def get_request(language=None):
@@ -101,7 +125,8 @@ def get_plugin_index_data(base_plugin, request):
         search_contents = not bool(search_fields)
 
     if search_contents:
-        plugin_contents = instance.render_plugin(context=RequestContext(request))
+        plugin_contents = instance.render_plugin(
+            context=RequestContext(request))
 
         if plugin_contents:
             text_bits = get_cleaned_bits(plugin_contents)
@@ -112,3 +137,13 @@ def get_plugin_index_data(base_plugin, request):
             cleaned_bits = get_cleaned_bits(value or '')
             text_bits.extend(cleaned_bits)
     return text_bits
+
+
+def add_prefix_to_path(path, prefix):
+    splitted_path = path.split('/', 1)
+    if len(splitted_path) == 1:
+        # template is not in directory
+        # template.html => prefix/template.html
+        return "{0}/{1}".format(prefix, splitted_path[0])
+    # directory/template.html => directory/prefix/template.html
+    return "{0}/{1}/{2}".format(splitted_path[0], prefix, splitted_path[1])

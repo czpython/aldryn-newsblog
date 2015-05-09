@@ -3,34 +3,38 @@
 from __future__ import unicode_literals
 
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.core.urlresolvers import reverse
-from django.db import models
+from django.db import connection, models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 try:
     from django.utils.encoding import force_unicode
 except ImportError:
     from django.utils.encoding import force_text as force_unicode
+
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.text import slugify as default_slugify
 from django.utils.timezone import now
-from django.utils.translation import get_language, ugettext_lazy as _
+from django.utils.translation import ugettext_lazy as _, override
 
+from aldryn_apphooks_config.fields import AppHookConfigField
 from aldryn_categories.fields import CategoryManyToManyField
 from aldryn_categories.models import Category
 from aldryn_people.models import Person
 from aldryn_reversion.core import version_controlled_content
+from aldryn_translation_tools.models import TranslationHelperMixin
 
 from cms.models.fields import PlaceholderField
 from cms.models.pluginmodel import CMSPlugin
-
+from cms.utils.i18n import get_current_language, get_redirect_on_fallback
 from djangocms_text_ckeditor.fields import HTMLField
 from filer.fields.image import FilerImageField
 from parler.models import TranslatableModel, TranslatedFields
 from sortedm2m.fields import SortedManyToManyField
 from taggit.managers import TaggableManager
+from taggit.models import Tag
 
 from .cms_appconfig import NewsBlogConfig
 from .managers import RelatedManager
@@ -47,9 +51,22 @@ else:
         'Neither LANGUAGES nor LANGUAGE was found in settings.')
 
 
+# At startup time, SQL_NOW_FUNC will contain the database-appropriate SQL to
+# obtain the CURRENT_TIMESTAMP.
+SQL_NOW_FUNC = {
+    'mssql': 'GetDate()', 'mysql': 'NOW()', 'postgresql': 'now()',
+    'sqlite': 'CURRENT_TIMESTAMP', 'oracle': 'CURRENT_TIMESTAMP'
+}[connection.vendor]
+
+SQL_IS_TRUE = {
+    'mssql': '== TRUE', 'mysql': '== 1', 'postgresql': 'IS TRUE',
+    'sqlite': '== 1', 'oracle': 'IS TRUE'
+}[connection.vendor]
+
+
 @python_2_unicode_compatible
 @version_controlled_content
-class Article(TranslatableModel):
+class Article(TranslationHelperMixin, TranslatableModel):
     translations = TranslatedFields(
         title=models.CharField(_('title'), max_length=234),
         slug=models.SlugField(
@@ -83,9 +100,9 @@ class Article(TranslatableModel):
                                related_name='newsblog_article_content')
     author = models.ForeignKey(Person, null=True, blank=True,
                                verbose_name=_('author'))
-    owner = models.ForeignKey(User, verbose_name=_('owner'))
-    app_config = models.ForeignKey(NewsBlogConfig,
-                                   verbose_name=_('app. config'))
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name=_('owner'))
+    app_config = AppHookConfigField(NewsBlogConfig,
+                                    verbose_name=_('app. config'))
     categories = CategoryManyToManyField('aldryn_categories.Category',
                                          verbose_name=_('categories'),
                                          blank=True)
@@ -113,24 +130,46 @@ class Article(TranslatableModel):
         Returns True only if the article (is_published == True) AND has a
         published_date that has passed.
         """
-        return (self.is_published and self.publishing_date < now())
+        return (self.is_published and self.publishing_date <= now())
 
-    def get_absolute_url(self):
-        #
-        # NB: It is important that this is safe to run even when the user has
-        # not created the apphook yet, as some user work-flows involve creating
-        # articles before the page exists.
-        #
-        try:
-            return reverse(
-                '{namespace}:article-detail'.format(
-                    namespace=self.app_config.namespace
-                ), kwargs={
-                    'slug': self.safe_translation_getter('slug', any_language=True)
-                }
-            )
-        except:
-            return ''  # Note NOT None here
+    @property
+    def future(self):
+        """
+        Returns True if the article is published but is scheduled for a
+        future date/time.
+        """
+        return (self.is_published and self.publishing_date > now())
+
+    def get_absolute_url(self, language=None):
+        """Returns the url for this Article in the selected permalink format."""
+        if not language:
+            language = get_current_language()
+        kwargs = {}
+        permalink_type = self.app_config.permalink_type
+        if 'y' in permalink_type:
+            kwargs.update(year=self.publishing_date.year)
+        if 'm' in permalink_type:
+            kwargs.update(month="%02d" % self.publishing_date.month)
+        if 'd' in permalink_type:
+            kwargs.update(day="%02d" % self.publishing_date.day)
+        if 'i' in permalink_type:
+            kwargs.update(pk=self.pk)
+        if 's' in permalink_type:
+            slug, lang = self.known_translation_getter(
+                'slug', default=None, language_code=language)
+            if slug and lang:
+                site_id = getattr(settings, 'SITE_ID', None)
+                if get_redirect_on_fallback(language, site_id):
+                    language = lang
+                kwargs.update(slug=slug)
+
+        if self.app_config and self.app_config.namespace:
+            namespace = '{0}:'.format(self.app_config.namespace)
+        else:
+            namespace = ''
+
+        with override(language):
+            return reverse('{0}article-detail'.format(namespace), kwargs=kwargs)
 
     def slugify(self, source_text, i=None):
         slug = default_slugify(source_text)
@@ -146,7 +185,7 @@ class Article(TranslatableModel):
         if not self.pk:
             return ''
         if language is None:
-            language = get_language()
+            language = get_current_language()
         if request is None:
             request = get_request(language=language)
         description = self.safe_translation_getter('lead_in')
@@ -181,6 +220,19 @@ class Article(TranslatableModel):
         if not self.slug:
             self.slug = default_slugify(self.title)
 
+        # NOTE: It is very important that we never allow a blank slug to be
+        # saved to the database. If we do, then subsequent attempts to create an
+        # article will fail Django validation on the form, since we are asking
+        # it to enforce uniqueness for (language, slug) pairs, and the slug in
+        # the form starts out empty. When Django tries to validate, it finds
+        # that the (language, slug) pair already exists, and we never even get
+        # here.
+        #
+        # Since the slug is derived from the title of the article, if the slug
+        # is still empty, then the title must be /effectively/ untitled.
+        if not self.slug:
+            self.slug = _('untitled-article')
+
         # Ensure we aren't colliding with an existing slug *for this language*.
         if not Article.objects.translated(
                 slug=self.slug).exclude(pk=self.pk).exists():
@@ -193,7 +245,7 @@ class Article(TranslatableModel):
             # slug__startswith=self.slug)
             # But sadly, this isn't supported by Parler/Django, see:
             # http://django-parler.readthedocs.org/en/latest/api/\
-            # parler.managers.html#the-translatablequeryset-class
+            #     parler.managers.html#the-translatablequeryset-class
             #
             slugs = []
             all_slugs = Article.objects.language(lang).exclude(
@@ -214,8 +266,7 @@ class Article(TranslatableModel):
 
 
 class PluginEditModeMixin(object):
-
-    def edit_mode(self, request):
+    def get_edit_mode(self, request):
         """
         Returns True only if an operator is logged-into the CMS and is in
         edit mode.
@@ -232,17 +283,17 @@ class NewsBlogCMSPlugin(CMSPlugin):
 
     app_config = models.ForeignKey(NewsBlogConfig)
 
-    def copy_relations(self, old_instance):
-        self.app_config = old_instance.app_config
-
     class Meta:
         abstract = True
+
+    def copy_relations(self, old_instance):
+        self.app_config = old_instance.app_config
 
 
 @python_2_unicode_compatible
 class NewsBlogArchivePlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
-    # NOTE: the PluginEditModeMixin is used in the cmsplugin, not here in
-    # the model
+    # NOTE: the PluginEditModeMixin is eventually used in the cmsplugin, not
+    # here in the model.
     def __str__(self):
         return _('%s archive') % (self.app_config.get_app_title(), )
 
@@ -260,28 +311,43 @@ class NewsBlogArticleSearchPlugin(NewsBlogCMSPlugin):
 
 @python_2_unicode_compatible
 class NewsBlogAuthorsPlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
+    def get_authors(self, request):
+        """
+        Returns a queryset of authors (people who have published an article),
+        annotated by the number of articles (article_count) that are visible to
+        the current user. If this user is anonymous, then this will be all
+        articles that are published and whose publishing_date has passed. If the
+        user is a logged-in cms operator, then it will be all articles.
+        """
+
+        # The basic subquery (for logged-in content managers in edit mode)
+        subquery = """
+            SELECT COUNT(*)
+            FROM aldryn_newsblog_article
+            WHERE
+                aldryn_newsblog_article.author_id =
+                    aldryn_people_person.id AND
+                aldryn_newsblog_article.app_config_id = %d"""
+
+        # For other users, limit subquery to published articles
+        if not self.get_edit_mode(request):
+            subquery += """ AND
+                aldryn_newsblog_article.is_published %s AND
+                aldryn_newsblog_article.publishing_date <= %s
+            """ % (SQL_IS_TRUE, SQL_NOW_FUNC, )
+
+        # Now, use this subquery in the construction of the main query.
+        query = """
+            SELECT (%s) as article_count, aldryn_people_person.*
+            FROM aldryn_people_person
+        """ % (subquery % (self.app_config.pk, ), )
+
+        raw_authors = list(Person.objects.raw(query))
+        authors = [author for author in raw_authors if author.article_count]
+        return sorted(authors, key=lambda x: x.article_count, reverse=True)
+
     def __str__(self):
         return _('%s authors') % (self.app_config.get_app_title(), )
-
-    def get_authors(self, request):
-        queryset = Article.objects
-
-        if not self.edit_mode(request):
-            queryset = queryset.published()
-
-        queryset = queryset.filter(
-            app_config=self.app_config
-        ).values_list('author', flat=True).distinct()
-
-        qs = Person.objects.filter(
-            pk__in=list(queryset),
-            article__is_published=True,
-            article__publishing_date__lte=now,
-            article__app_config=self.app_config
-        ).annotate(
-            count=models.Count('article')
-        ).order_by('name')
-        return qs
 
 
 @python_2_unicode_compatible
@@ -290,24 +356,40 @@ class NewsBlogCategoriesPlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
         return _('%s categories') % (self.app_config.get_app_title(), )
 
     def get_categories(self, request):
-        queryset = Article.objects
+        """
+        Returns a list of categories, annotated by the number of articles
+        (article_count) that are visible to the current user. If this user is
+        anonymous, then this will be all articles that are published and whose
+        publishing_date has passed. If the user is a logged-in cms operator,
+        then it will be all articles.
+        """
 
-        if not self.edit_mode(request):
-            queryset = queryset.published()
+        subquery = """
+            SELECT COUNT(*)
+            FROM aldryn_newsblog_article, aldryn_newsblog_article_categories
+            WHERE
+                aldryn_newsblog_article_categories.category_id =
+                    aldryn_categories_category.id AND
+                aldryn_newsblog_article_categories.article_id =
+                    aldryn_newsblog_article.id AND
+                aldryn_newsblog_article.app_config_id = %d
+        """ % (self.app_config.pk, )
 
-        queryset = queryset.filter(
-            app_config=self.app_config
-        ).values_list('categories', flat=True).distinct()
+        if not self.get_edit_mode(request):
+            subquery += """ AND
+                aldryn_newsblog_article.is_published %s AND
+                aldryn_newsblog_article.publishing_date <= %s
+            """ % (SQL_IS_TRUE, SQL_NOW_FUNC, )
 
-        qs = Category.objects.filter(
-            pk__in=list(queryset),
-            article__is_published=True,
-            article__publishing_date__lte=now,
-            article__app_config=self.app_config,
-        ).annotate(
-            count=models.Count('article')
-        ).order_by('-count')
-        return qs
+        query = """
+            SELECT (%s) as article_count, aldryn_categories_category.*
+            FROM aldryn_categories_category
+        """ % (subquery, )
+
+        raw_categories = list(Category.objects.raw(query))
+        categories = [
+            category for category in raw_categories if category.article_count]
+        return sorted(categories, key=lambda x: x.article_count, reverse=True)
 
 
 @python_2_unicode_compatible
@@ -321,13 +403,10 @@ class NewsBlogFeaturedArticlesPlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
     def get_articles(self, request):
         if not self.article_count:
             return Article.objects.none()
-
         queryset = Article.objects
-
-        if not self.edit_mode(request):
+        if not self.get_edit_mode(request):
             queryset = queryset.published()
-
-        queryset = queryset.active_translations(get_language()).filter(
+        queryset = queryset.active_translations(get_current_language()).filter(
             app_config=self.app_config,
             is_featured=True,
         )
@@ -353,25 +432,39 @@ class NewsBlogLatestArticlesPlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
         help_text=_('The maximum number of latest articles to display.')
     )
 
-    def __str__(self):
-        return _('%s latest articles: %s') % (
-            self.app_config.get_app_title(), self.latest_articles, )
-
     def get_articles(self, request):
+        """
+        Returns a queryset of the latest N articles. N is the plugin setting:
+        latest_articles.
+        """
         queryset = Article.objects
-        if not self.edit_mode(request):
+        if not self.get_edit_mode(request):
             queryset = queryset.published()
-        queryset = queryset.active_translations(get_language()).filter(
+        queryset = queryset.active_translations(get_current_language()).filter(
             app_config=self.app_config
         )
         return queryset[:self.latest_articles]
 
+    def __str__(self):
+        return _('%s latest articles: %s') % (
+            self.app_config.get_app_title(), self.latest_articles, )
+
 
 @python_2_unicode_compatible
-class NewsBlogRelatedPlugin(CMSPlugin):
-    # NOTE: This one does NOT subclass NewsBlogCMSPlugin
+class NewsBlogRelatedPlugin(PluginEditModeMixin, CMSPlugin):
+    # NOTE: This one does NOT subclass NewsBlogCMSPlugin. This is because this
+    # plugin can really only be placed on the article detail view in an apphook.
     cmsplugin_ptr = models.OneToOneField(
         CMSPlugin, related_name='+', parent_link=True)
+
+    def get_articles(self, article, request):
+        """
+        Returns a queryset of articles that are related to the given article.
+        """
+        qs = article.related.all()
+        if not self.get_edit_mode(request):
+            qs = qs.published()
+        return qs
 
     def __str__(self):
         return _('Related articles')
@@ -379,27 +472,44 @@ class NewsBlogRelatedPlugin(CMSPlugin):
 
 @python_2_unicode_compatible
 class NewsBlogTagsPlugin(PluginEditModeMixin, NewsBlogCMSPlugin):
-    def __str__(self):
-        return _('%s tags') % (self.app_config.get_app_title(), )
 
     def get_tags(self, request):
-        tags = {}
-        queryset = Article.objects
-        if not self.edit_mode(request):
-            queryset = queryset.published()
-        queryset = queryset.filter(
-            app_config=self.app_config
-        ).prefetch_related('tags')
+        """
+        Returns a queryset of tags, annotated by the number of articles
+        (article_count) that are visible to the current user. If this user is
+        anonymous, then this will be all articles that are published and whose
+        publishing_date has passed. If the user is a logged-in cms operator,
+        then it will be all articles.
+        """
 
-        for article in queryset:
-            for tag in article.tags.all():
-                if tag.pk in tags:
-                    tags[tag.pk].count += 1
-                else:
-                    tag.count = 1
-                    tags[tag.pk] = tag
-        # Return most frequently used tags first
-        return sorted(tags.values(), key=lambda x: x.count, reverse=True)
+        article_content_type = ContentType.objects.get_for_model(Article)
+
+        subquery = """
+            SELECT COUNT(*)
+            FROM aldryn_newsblog_article, taggit_taggeditem
+            WHERE
+                taggit_taggeditem.tag_id = taggit_tag.id AND
+                taggit_taggeditem.content_type_id = %d AND
+                taggit_taggeditem.object_id = aldryn_newsblog_article.id AND
+                aldryn_newsblog_article.app_config_id = %d"""
+
+        if not self.get_edit_mode(request):
+            subquery += """ AND
+                aldryn_newsblog_article.is_published %s AND
+                aldryn_newsblog_article.publishing_date <= %s
+            """ % (SQL_IS_TRUE, SQL_NOW_FUNC, )
+
+        query = """
+            SELECT (%s) as article_count, taggit_tag.*
+            FROM taggit_tag
+        """ % (subquery % (article_content_type.id, self.app_config.pk), )
+
+        raw_tags = list(Tag.objects.raw(query))
+        tags = [tag for tag in raw_tags if tag.article_count]
+        return sorted(tags, key=lambda x: x.article_count, reverse=True)
+
+    def __str__(self):
+        return _('%s tags') % (self.app_config.get_app_title(), )
 
 
 @receiver(post_save)

@@ -3,17 +3,18 @@ from setuptools import setup, find_packages
 from aldryn_newsblog import __version__
 
 REQUIREMENTS = [
-    'aldryn-apphooks-config>=0.1.4',
+    'aldryn-apphooks-config>=0.2.4',
     'aldryn-boilerplates',
     'aldryn-categories',
-    'aldryn-common',
-    'aldryn-people>=0.4.6',
+    'aldryn-common>=0.1.3',
+    'aldryn-people>=0.5.2',
     'aldryn-reversion>=0.0.2',
+    'aldryn-translation-tools',
     'backport_collections==0.1',
     'django-appdata>=0.1.4',
     'django-cms>=3.0.12',
     'django-filer>=0.9.9,<0.10',
-    'django-parler',
+    'django-parler>=1.4',
     'django-reversion>=1.8.2,<1.9',
     'django-sortedm2m',
     'django-taggit',

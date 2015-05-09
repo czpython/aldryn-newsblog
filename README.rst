@@ -1,8 +1,16 @@
-|PyPI Version| |Build Status| |Coverage Status|
+|codeclimate| |PyPI Version| |Build Status| |Coverage Status|
 
 ===============
 Aldryn Newsblog
 ===============
+
+NOTICE: ::
+
+    *FROM VERSION 1.0.0, ALDRYN_NEWSBLOG WILL REQUIRE CMS 3.0 OR LATER*
+
+    If you intend to migrate from a 2.x project, please make sure you first
+    upgrade your project to the latest CMS 3.0.x, run all South migrations,
+    then, you can upgrade to futher CMS releases (3.1.x, etc.)
 
 NOTICE: ::
 
@@ -44,7 +52,7 @@ Installation & Usage
 django CMS Requirements
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-This project requires django CMS 3.0.12.
+This project requires django CMS 3.0.12 or later.
 
 
 Aldryn Platform Users
@@ -75,7 +83,7 @@ Manual Installation
       django-filer
       django-parler
       django-reversion
-      taggit
+      django-taggit
 
 2) Add below apps to ``INSTALLED_APPS``: ::
 
@@ -92,6 +100,7 @@ Manual Installation
         'filer',
         'parler',
         'reversion',
+        'sortedm2m',
         'taggit',
         …
     ]
@@ -110,14 +119,13 @@ Manual Installation
    NOTE: aldryn_newsblog supports both South and Django 1.7 migrations. If using
    Django 1.7, you may need to add the following to your settings: ::
 
-    MIGRATION_MODULES = [
+    MIGRATION_MODULES = {
        …
-       'aldryn_newsblog': 'aldryn_newsblog.south_migrations',
-       # The following are for some of the depenencies.
+       # The following are for some of the dependencies.
        'djangocms_text_ckeditor': 'djangocms_text_ckeditor.migrations_django',
        'filer': 'filer.migrations_django',
        …
-    ]
+    }
 
 4) Add Required Easy Thumbnail setting
 
@@ -133,7 +141,6 @@ Manual Installation
         # 'easy_thumbnails.processors.scale_and_crop',
         'filer.thumbnail_processors.scale_and_crop_with_subject_location',
         'easy_thumbnails.processors.filters',
-        # 'entercoms.apps.strategies.processors.reflect',
     )
 
    For more information on this optional processor, see the `documentation for Django Filer`__.
@@ -161,8 +168,8 @@ Related Articles Plugin
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The Related Articles plugin is only appropriate for use only on the article
-detail view. If the plugin in placed on any other page, it will render and empty
-DIV.
+detail view. If the plugin in placed on any other page, it will render an empty
+`<DIV></DIV>`.
 
 
 Known Issues
@@ -175,14 +182,9 @@ For more information, see the `documentation for django CMS`__.
 __ https://django-cms.readthedocs.org/en/support-3.0.x/how_to/apphooks.html#apphooks
 
 
-Django 1.7
-~~~~~~~~~~
-
-At time of this writing, due to circumstances beyond our control, we are unable
-to support both django-taggit and django-sortedm2m in the same Django 1.7
-environment. As both of these projects are dependences, this application is not
-yet compatible with Django 1.7. We expect this to be resolved very soon.
-
+.. |codeclimate| image:: https://codeclimate.com/github/aldryn/aldryn-newsblog/badges/gpa.svg
+   :target: https://codeclimate.com/github/aldryn/aldryn-newsblog
+   :alt: Code Climate
 .. |PyPI Version| image:: http://img.shields.io/pypi/v/aldryn-newsblog.svg
    :target: https://pypi.python.org/pypi/aldryn-newsblog
 .. |Build Status| image:: http://img.shields.io/travis/aldryn/aldryn-newsblog/master.svg

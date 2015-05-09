@@ -2,34 +2,31 @@
 
 from __future__ import unicode_literals
 
+import time
 import datetime
 import pytz
 
 from django.core.urlresolvers import reverse
-from django.test import TestCase
 
 from aldryn_newsblog.models import NewsBlogConfig
 from cms import api
 
-from . import NewsBlogTestsMixin
+from . import NewsBlogTestCase
 
 
-class TestAppConfigPluginsBase(NewsBlogTestsMixin, TestCase):
+class TestAppConfigPluginsBase(NewsBlogTestCase):
     plugin_to_test = 'TextPlugin'
     plugin_params = {}
 
     def setUp(self):
         super(TestAppConfigPluginsBase, self).setUp()
-        self.page = api.create_page(
-            'plugin page', self.template, self.language,
-            parent=self.root_page, published=True
-        )
-        self.placeholder = self.page.placeholders.all()[0]
-        api.add_plugin(self.placeholder, self.plugin_to_test, self.language,
+        self.placeholder = self.plugin_page.placeholders.all()[0]
+        api.add_plugin(
+            self.placeholder, self.plugin_to_test, self.language,
             app_config=self.app_config, **self.plugin_params)
         self.plugin = self.placeholder.get_plugins()[0].get_plugin_instance()[0]
         self.plugin.save()
-        self.page.publish(self.language)
+        self.plugin_page.publish(self.language)
         self.another_app_config = NewsBlogConfig.objects.create(
             namespace=self.rand_str())
 
@@ -51,8 +48,9 @@ class TestArchivePlugin(TestAppConfigPluginsBase):
             article = self.create_article(publishing_date=d)
             articles.append(article)
 
-        response = self.client.get(self.page.get_absolute_url())
-        needle = '<a href="/en/page/{year}/{month}/"[^>]*>[^<]*<span class="badge">{num}</span>'
+        response = self.client.get(self.plugin_page.get_absolute_url())
+        needle = '<a href="/en/page/{year}/{month}/"[^>]*>'
+        '[^<]*<span class="badge">{num}</span>'
         month1 = needle.format(year=2014, month=11, num=2)
         month2 = needle.format(year=2015, month=2, num=1)
         month3 = needle.format(year=2015, month=1, num=3)
@@ -73,7 +71,7 @@ class TestArticleSearchPlugin(TestAppConfigPluginsBase):
 
     def test_article_search_plugin(self):
         needle = '<input type="hidden" name="max_articles" value="{num}">'
-        response = self.client.get(self.page.get_absolute_url())
+        response = self.client.get(self.plugin_page.get_absolute_url())
         self.assertContains(response, needle.format(num=5))
 
 
@@ -101,14 +99,17 @@ class TestAuthorsPlugin(TestAppConfigPluginsBase):
                 is_published=False
             )
             other_articles.append(article)
-        
+
         # Published, author1 articles in a different namespace
         other_articles.append(self.create_article(
             author=author1,
             app_config=self.another_app_config
         ))
 
-        response = self.client.get(self.page.get_absolute_url())
+        # REQUIRED DUE TO USE OF RAW QUERIES
+        time.sleep(1)
+
+        response = self.client.get(self.plugin_page.get_absolute_url())
         pattern = '<p class="author"><a href="{url}"></a>'
         pattern += '</p>\s*<p[^>]*></p>\s*<p class="badge">{num}</p>'
         author1_pattern = pattern.format(
@@ -159,7 +160,10 @@ class TestCategoriesPlugin(TestAppConfigPluginsBase):
             article.categories.add(self.category1)
             other_articles.append(article)
 
-        response = self.client.get(self.page.get_absolute_url())
+        # REQUIRED DUE TO USE OF RAW QUERIES
+        time.sleep(1)
+
+        response = self.client.get(self.plugin_page.get_absolute_url())
         pattern = '<span[^>]*>{num}</span>\s*<a href=[^>]*>{name}</a>'
         needle1 = pattern.format(num=3, name=self.category1.name)
         needle2 = pattern.format(num=5, name=self.category2.name)
@@ -191,7 +195,7 @@ class TestFeaturedArticlesPlugin(TestAppConfigPluginsBase):
             app_config=self.another_app_config
         ) for _ in range(3)]
 
-        response = self.client.get(self.page.get_absolute_url())
+        response = self.client.get(self.plugin_page.get_absolute_url())
         for article in featured_articles:
             self.assertContains(response, article.title)
         for article in other_articles:
@@ -209,14 +213,30 @@ class TestLatestArticlesPlugin(TestAppConfigPluginsBase):
         another_app_config = NewsBlogConfig.objects.create(namespace='another')
         another_articles = [self.create_article(app_config=another_app_config)
                             for _ in range(3)]
-        response = self.client.get(self.page.get_absolute_url())
+        response = self.client.get(self.plugin_page.get_absolute_url())
         for article in articles:
             self.assertContains(response, article.title)
         for article in another_articles:
             self.assertNotContains(response, article.title)
 
 
-class TestRelatedArticlesPlugin(NewsBlogTestsMixin, TestCase):
+class TestPrefixedLatestArticlesPlugin(TestLatestArticlesPlugin):
+    plugin_to_test = 'NewsBlogLatestArticlesPlugin'
+    plugin_params = {
+        "latest_articles": 7,
+    }
+
+    def setUp(self):
+        super(TestPrefixedLatestArticlesPlugin, self).setUp()
+        self.app_config.template_prefix = 'dummy'
+        self.app_config.save()
+
+    def test_latest_articles_plugin(self):
+        response = self.client.get(self.plugin_page.get_absolute_url())
+        self.assertContains(response, 'This is dummy latest articles plugin')
+
+
+class TestRelatedArticlesPlugin(NewsBlogTestCase):
 
     def test_related_articles_plugin(self):
         main_article = self.create_article(app_config=self.app_config)
@@ -224,7 +244,7 @@ class TestRelatedArticlesPlugin(NewsBlogTestsMixin, TestCase):
         api.add_plugin(self.placeholder, 'NewsBlogRelatedPlugin', self.language)
         self.plugin = self.placeholder.get_plugins()[0].get_plugin_instance()[0]
         self.plugin.save()
-        self.page.publish(self.language)
+        self.plugin_page.publish(self.language)
 
         main_article.save()
         for _ in range(3):
@@ -257,6 +277,9 @@ class TestTagsPlugin(TestAppConfigPluginsBase):
         other_articles += self.create_tagged_articles(
             1, tags=['tag1'], app_config=self.another_app_config)['tag1']
 
-        response = self.client.get(self.page.get_absolute_url())
+        # REQUIRED DUE TO USE OF RAW QUERIES
+        time.sleep(1)
+
+        response = self.client.get(self.plugin_page.get_absolute_url())
         self.assertRegexpMatches(str(response), 'tag1\s*<span[^>]*>3</span>')
         self.assertRegexpMatches(str(response), 'tag2\s*<span[^>]*>5</span>')

@@ -11,13 +11,7 @@
         "easy_thumbnails",
         "filer",
         "sortedm2m",
-        "taggit"
-    ],
-    "author": {
-        "name": "Divio AG",
-        "url": "https://www.divio.ch"
-    },
-    "license": {
-        "name": "BSD"
-    }
+        "taggit",
+        "treebeard"
+    ]
 }

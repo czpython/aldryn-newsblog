@@ -10,20 +10,20 @@ from random import randint
 
 from django.conf import settings
 from django.core.files import File as DjangoFile
-from django.core.urlresolvers import reverse
-from django.test import TestCase
+from django.core.urlresolvers import reverse, NoReverseMatch
 from django.utils.timezone import now
-from django.utils.translation import get_language, override
+from django.utils.translation import override
 
 from aldryn_newsblog.models import Article, NewsBlogConfig
 from aldryn_newsblog.search_indexes import ArticleIndex
+from cms.utils.i18n import get_current_language
 from easy_thumbnails.files import get_thumbnailer
 from filer.models.imagemodels import Image
 from parler.tests.utils import override_parler_settings
 from parler.utils.conf import add_default_language_settings
 from parler.utils.context import switch_language, smart_override
 
-from . import NewsBlogTestsMixin, TESTS_STATIC_ROOT
+from . import NewsBlogTestCase, TESTS_STATIC_ROOT
 
 FEATURED_IMAGE_PATH = os.path.join(TESTS_STATIC_ROOT, 'featured_image.jpg')
 
@@ -50,15 +50,16 @@ PARLER_LANGUAGES_SHOW = {
 }
 
 
-class TestViews(NewsBlogTestsMixin, TestCase):
+class TestViews(NewsBlogTestCase):
 
     def test_articles_list(self):
+        namespace = self.app_config.namespace
         articles = [self.create_article() for _ in range(11)]
         unpublished_article = articles[0]
         unpublished_article.is_published = False
         unpublished_article.save()
         response = self.client.get(
-            reverse('aldryn_newsblog:article-list'))
+            reverse('{0}:article-list'.format(namespace)))
         for article in articles[1:]:
             self.assertContains(response, article.title)
         self.assertNotContains(response, unpublished_article.title)
@@ -119,7 +120,8 @@ class TestViews(NewsBlogTestsMixin, TestCase):
                         app_config=self.app_config,
                         author=author, owner=author.user,
                         publishing_date=now())
-                    # Make sure there are translations in place for the articles.
+                    # Make sure there are translations in place for the
+                    # articles.
                     for language, _ in settings.LANGUAGES[1:]:
                         with switch_language(article, language):
                             code = "{0}-".format(language)
@@ -131,9 +133,10 @@ class TestViews(NewsBlogTestsMixin, TestCase):
 
                 for language, _ in settings.LANGUAGES:
                     with switch_language(category, language):
-                        url = reverse('aldryn_newsblog:article-list-by-category',
-                                      kwargs={'category': category.slug})
-                    response = self.client.get(url)
+                        url = reverse(
+                            'aldryn_newsblog:article-list-by-category',
+                            kwargs={'category': category.slug})
+                        response = self.client.get(url)
                     for article in articles:
                         if language in article.get_available_languages():
                             article.set_current_language(language)
@@ -149,7 +152,31 @@ class TestViews(NewsBlogTestsMixin, TestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class TestTranslationFallbacks(NewsBlogTestsMixin, TestCase):
+class TestTemplatePrefixes(NewsBlogTestCase):
+
+    def setUp(self):
+        super(TestTemplatePrefixes, self).setUp()
+        self.app_config.template_prefix = 'dummy'
+        self.app_config.save()
+
+    def test_articles_list(self):
+        namespace = self.app_config.namespace
+        response = self.client.get(
+            reverse('{0}:article-list'.format(namespace)))
+        self.assertContains(response, 'This is dummy article list page')
+
+    def test_article_detail(self):
+        article = self.create_article(app_config=self.app_config)
+        namespace = self.app_config.namespace
+        response = self.client.get(
+            reverse(
+                '{0}:article-detail'.format(namespace),
+                kwargs={'slug': article.slug}
+            ))
+        self.assertContains(response, 'This is dummy article detail page')
+
+
+class TestTranslationFallbacks(NewsBlogTestCase):
     def test_article_detail_not_translated_fallback(self):
         """
         If the fallback is configured, article is available in any
@@ -160,7 +187,8 @@ class TestTranslationFallbacks(NewsBlogTestsMixin, TestCase):
 
         with override(settings.LANGUAGES[0][0]):
             article = Article.objects.create(
-                title=self.rand_str(), slug=self.rand_str(prefix=code),
+                title=self.rand_str(),
+                slug=self.rand_str(prefix=code),
                 app_config=self.app_config,
                 author=author, owner=author.user,
                 publishing_date=now())
@@ -183,7 +211,21 @@ class TestTranslationFallbacks(NewsBlogTestsMixin, TestCase):
                 )
                 self.assertNotEquals(url, url_one)
                 response = self.client.get(url)
-                self.assertEquals(response.status_code, 200)
+                # This is a redirect to the new language
+                self.assertEquals(response.status_code, 302)
+
+            # Test again with redirect_on_fallback = False
+            with self.settings(CMS_LANGUAGES=self.NO_REDIRECT_CMS_SETTINGS):
+                language = settings.LANGUAGES[1][0]
+                with switch_language(article, language):
+                    url = reverse(
+                        'aldryn_newsblog:article-detail',
+                        kwargs={'slug': article.slug, }
+                    )
+                    self.assertNotEquals(url, url_one)
+                    response = self.client.get(url)
+                    # This is a redirect to the new language
+                    self.assertEquals(response.status_code, 200)
 
     def test_article_detail_not_translated_no_fallback(self):
         """
@@ -231,7 +273,7 @@ class TestTranslationFallbacks(NewsBlogTestsMixin, TestCase):
                 self.assertEqual(response.status_code, 404)
 
 
-class TestImages(NewsBlogTestsMixin, TestCase):
+class TestImages(NewsBlogTestCase):
     def test_article_detail_show_featured_image(self):
         author = self.create_person()
         with open(FEATURED_IMAGE_PATH, 'rb') as f:
@@ -250,7 +292,7 @@ class TestImages(NewsBlogTestsMixin, TestCase):
         self.assertContains(response, image_url)
 
 
-class TestVariousViews(NewsBlogTestsMixin, TestCase):
+class TestVariousViews(NewsBlogTestCase):
     def test_articles_by_tag(self):
         """
         Tests that TagArticleList view properly filters articles by their tags.
@@ -301,10 +343,9 @@ class TestVariousViews(NewsBlogTestsMixin, TestCase):
 
         self.assertEquals(
             sorted(
-                Article.objects.get_months(request=None,
-                    namespace=self.app_config.namespace),
-                key=itemgetter('num_articles')),
-            months)
+                Article.objects.get_months(
+                    request=None, namespace=self.app_config.namespace
+                ), key=itemgetter('num_articles')), months)
 
     def test_articles_count_by_author(self):
         authors = []
@@ -333,7 +374,8 @@ class TestVariousViews(NewsBlogTestsMixin, TestCase):
             authors)
 
     def test_articles_count_by_tags(self):
-        tags = Article.objects.get_tags(request=None, namespace=self.app_config.namespace)
+        tags = Article.objects.get_tags(
+            request=None, namespace=self.app_config.namespace)
         self.assertEquals(tags, [])
 
         untagged_articles = []
@@ -355,7 +397,8 @@ class TestVariousViews(NewsBlogTestsMixin, TestCase):
             (tag_slug3, 5),
             (tag_slug2, 3),
         ]
-        tags = Article.objects.get_tags(request=None, namespace=self.app_config.namespace)
+        tags = Article.objects.get_tags(
+            request=None, namespace=self.app_config.namespace)
         tags = map(lambda x: (x.slug, x.num_articles), tags)
         self.assertEquals(tags, tags_expected)
 
@@ -422,18 +465,11 @@ class TestVariousViews(NewsBlogTestsMixin, TestCase):
         app_config = NewsBlogConfig.objects.create(namespace='another')
         articles = [self.create_article(app_config=app_config)
                     for _ in range(11)]
-        try:
-            response = self.client.get(articles[0].get_absolute_url())
-        except:
-            self.fail(
-                'get_absolute_url raises exception when config not apphooked.')
-        response = self.client.get(
-            reverse('aldryn_newsblog:article-list'))
-        for article in articles:
-            self.assertNotContains(response, article.title)
+        with self.assertRaises(NoReverseMatch):
+            self.client.get(articles[0].get_absolute_url())
 
 
-class TestIndex(NewsBlogTestsMixin, TestCase):
+class TestIndex(NewsBlogTestCase):
     def test_index_simple(self):
         self.index = ArticleIndex()
         content0 = self.rand_str(prefix='content0_')
@@ -464,10 +500,10 @@ class TestIndex(NewsBlogTestsMixin, TestCase):
         content0 = self.rand_str(prefix='content0_')
         self.setup_categories()
 
-        article_1 = self.create_article(content=content0, lead_in=u'lead in text',
-                                        title=u'a title')
-        article_2 = self.create_article(content=content0, lead_in=u'lead in text',
-                                        title=u'second title')
+        article_1 = self.create_article(
+            content=content0, lead_in=u'lead in text', title=u'a title')
+        article_2 = self.create_article(
+            content=content0, lead_in=u'lead in text', title=u'second title')
         for article in (article_1, article_2):
             for tag_name in ('tag 1', 'tag2'):
                 article.tags.add(tag_name)
@@ -481,12 +517,17 @@ class TestIndex(NewsBlogTestsMixin, TestCase):
         LANGUAGES = add_default_language_settings(PARLER_LANGUAGES_HIDE)
         with override_parler_settings(PARLER_LANGUAGES=LANGUAGES):
             with smart_override('de'):
-                language = get_language()
+                language = get_current_language()
                 # english-only article is excluded
                 qs = self.index.index_queryset(language)
                 self.assertEqual(qs.count(), 1)
-                self.assertEqual(qs.translated(language, title__icontains='title').count(), 1)
+                self.assertEqual(
+                    qs.translated(language, title__icontains='title').count(),
+                    1
+                )
                 # the language is correctly setup
                 for article_de in qs:
-                    self.assertEqual(self.index.get_title(article_de), 'de title')
-                    self.assertEqual(self.index.get_description(article_de), 'de lead in')
+                    self.assertEqual(
+                        self.index.get_title(article_de), 'de title')
+                    self.assertEqual(
+                        self.index.get_description(article_de), 'de lead in')
