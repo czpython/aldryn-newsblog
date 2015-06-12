@@ -17,7 +17,7 @@ except ImportError:
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.text import slugify as default_slugify
 from django.utils.timezone import now
-from django.utils.translation import ugettext_lazy as _, override
+from django.utils.translation import ugettext_lazy as _, ugettext, override
 
 from aldryn_apphooks_config.fields import AppHookConfigField
 from aldryn_categories.fields import CategoryManyToManyField
@@ -59,7 +59,7 @@ SQL_NOW_FUNC = {
 }[connection.vendor]
 
 SQL_IS_TRUE = {
-    'mssql': '== TRUE', 'mysql': '== 1', 'postgresql': 'IS TRUE',
+    'mssql': '== TRUE', 'mysql': '= 1', 'postgresql': 'IS TRUE',
     'sqlite': '== 1', 'oracle': 'IS TRUE'
 }[connection.vendor]
 
@@ -188,7 +188,7 @@ class Article(TranslationHelperMixin, TranslatableModel):
             language = get_current_language()
         if request is None:
             request = get_request(language=language)
-        description = self.safe_translation_getter('lead_in')
+        description = self.safe_translation_getter('lead_in', '')
         text_bits = [strip_tags(description)]
         for category in self.categories.all():
             text_bits.append(
@@ -218,7 +218,7 @@ class Article(TranslationHelperMixin, TranslatableModel):
 
         # Start with a naïve approach, if none provided.
         if not self.slug:
-            self.slug = default_slugify(self.title)
+            self.slug = force_unicode(default_slugify(self.title))
 
         # NOTE: It is very important that we never allow a blank slug to be
         # saved to the database. If we do, then subsequent attempts to create an
@@ -231,11 +231,11 @@ class Article(TranslationHelperMixin, TranslatableModel):
         # Since the slug is derived from the title of the article, if the slug
         # is still empty, then the title must be /effectively/ untitled.
         if not self.slug:
-            self.slug = _('untitled-article')
+            self.slug = ugettext('untitled-article')
 
         # Ensure we aren't colliding with an existing slug *for this language*.
-        if not Article.objects.translated(
-                slug=self.slug).exclude(pk=self.pk).exists():
+        if not Article.objects.language(self.get_current_language()).filter(
+                translations__slug=self.slug).exclude(pk=self.pk).exists():
             return super(Article, self).save(*args, **kwargs)
 
         for lang in LANGUAGE_CODES:
@@ -251,11 +251,11 @@ class Article(TranslationHelperMixin, TranslatableModel):
             all_slugs = Article.objects.language(lang).exclude(
                 pk=self.pk).values_list('translations__slug', flat=True)
             for slug in all_slugs:
-                if slug and slug.startswith(self.slug):
+                if slug and slug.startswith((self.title, self.slug)):
                     slugs.append(slug)
             i = 1
             while True:
-                slug = self.slugify(self.title, i)
+                slug = self.slugify(self.title or self.slug, i)
                 if slug not in slugs:
                     self.slug = slug
                     return super(Article, self).save(*args, **kwargs)
@@ -520,7 +520,8 @@ def update_seach_index(sender, instance, **kwargs):
     perform simple searches even without Haystack, etc.
     """
     if issubclass(instance.__class__, CMSPlugin):
-        placeholder = instance._placeholder_cache
+        placeholder = (getattr(instance, '_placeholder_cache', None)
+                       or instance.placeholder)
         if hasattr(placeholder, '_attached_model_cache'):
             if placeholder._attached_model_cache == Article:
                 article = placeholder._attached_model_cache.objects.get(
