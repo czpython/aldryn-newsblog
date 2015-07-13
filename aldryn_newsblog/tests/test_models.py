@@ -82,6 +82,54 @@ class TestModels(NewsBlogTestCase):
         self.assertEquals(article.author.name,
                           u' '.join((user.first_name, user.last_name)))
 
+    def test_auto_search_data(self):
+        activate(self.language)
+
+        user = self.create_user()
+
+        lead_in = 'Hello! this text will be searchable.'
+
+        Article.update_search_on_save = True
+
+        article = Article.objects.create(
+            title=self.rand_str(),
+            owner=user,
+            lead_in=lead_in,
+            app_config=self.app_config,
+            publishing_date=now()
+        )
+        article.save()
+
+        search_data = article.get_search_data()
+
+        self.assertEquals(lead_in, search_data)
+        self.assertEquals(article.search_data, search_data)
+
+    def test_auto_search_data_off(self):
+        activate(self.language)
+        user = self.create_user()
+
+        lead_in = 'Hello! this text will not be searchable.'
+
+        Article.update_search_on_save = False
+
+        article = Article.objects.create(
+            title=self.rand_str(),
+            owner=user,
+            lead_in=lead_in,
+            app_config=self.app_config,
+            publishing_date=now()
+        )
+        article.save()
+
+        search_data = article.get_search_data()
+
+        # set it back to true
+        Article.update_search_on_save = True
+
+        self.assertEquals(lead_in, search_data)
+        self.assertNotEquals(article.search_data, search_data)
+
     def test_has_content(self):
         # Just make sure we have a known language
         activate(self.language)
@@ -99,6 +147,30 @@ class TestModels(NewsBlogTestCase):
         response = self.client.get(article.get_absolute_url())
         self.assertContains(response, title)
         self.assertContains(response, content)
+
+    def test_change_title(self):
+        """
+        Test that we can change the title of an existing, published article
+        without issue. Also ensure that the slug does NOT change when changing
+        the title alone.
+        """
+        activate(self.language)
+        initial_title = "This is the initial title"
+        initial_slug = "this-is-the-initial-title"
+        author = self.create_person()
+        article = Article.objects.create(
+            title=initial_title, author=author, owner=author.user,
+            app_config=self.app_config, publishing_date=now())
+        article.save()
+        self.assertEquals(article.title, initial_title)
+        self.assertEquals(article.slug, initial_slug)
+        # Now, let's try to change the title
+        new_title = "This is the new title"
+        article.title = new_title
+        article.save()
+        article = self.reload(article)
+        self.assertEquals(article.title, new_title)
+        self.assertEquals(article.slug, initial_slug)
 
 
 class TestModelsTransactions(NewsBlogTransactionTestCase):

@@ -1,6 +1,20 @@
 CHANGELOG
 =========
 
+1.0.1 (2015-06-30)
+------------------
+
+* Fixes an issue where unintended, empty translations are created
+
+1.0.0 (2015-06-23)
+------------------
+
+* First production release
+* i18n improvements
+* Spaces support fixes
+* Improve user documentation
+* Increase test coverage
+
 0.9.6 (2015-05-31)
 ------------------
 
@@ -33,7 +47,7 @@ CHANGELOG
 * Add "magic" migrations to move from old-style CMS plugin table naming to new
   for users using older versions of CMS.
 * Post a deprecation notice about supporting only CMS 3.0+ from version 1.0.0
-  of Aldryn NewsBlog.
+  of Aldryn News & Blog.
 
 
 0.9.2 (2015-04-21)
